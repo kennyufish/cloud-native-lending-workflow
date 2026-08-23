@@ -1,0 +1,11 @@
+aws_region         = "us-west-2"
+project_name       = "lending-workflow"
+environment        = "demo"
+# availability_zones = ["us-west-2a", "us-west-2b"] # Optional override.
+db_instance_class  = "db.t4g.micro"
+internal_api_token = "replace-with-a-random-demo-token-at-least-32-characters"
+
+# The deployment workflow supplies immutable sha-* image tags after creating ECR.
+# For a manual run, set these to images that already exist in the repositories.
+# application_image = "123456789012.dkr.ecr.us-west-2.amazonaws.com/lending-workflow-demo/application-service:sha-..."
+# worker_image      = "123456789012.dkr.ecr.us-west-2.amazonaws.com/lending-workflow-demo/decision-worker:sha-..."

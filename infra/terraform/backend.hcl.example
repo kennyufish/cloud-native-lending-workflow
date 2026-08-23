@@ -1,0 +1,7 @@
+# The bucket must be created once by an account administrator and should have
+# versioning, default encryption, and a bucket policy limited to the CI role.
+bucket       = "replace-with-a-versioned-terraform-state-bucket"
+key          = "lending-workflow/demo/terraform.tfstate"
+region       = "us-west-2"
+use_lockfile = true
+encrypt      = true

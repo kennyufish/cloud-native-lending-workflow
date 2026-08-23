@@ -1,0 +1,170 @@
+name: cloud-native-lending-workflow
+
+services:
+  postgres:
+    image: postgres:18.4-alpine
+    environment:
+      POSTGRES_DB: lending
+      POSTGRES_USER: lending
+      POSTGRES_PASSWORD: lending
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lending -d lending"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  localstack:
+    image: localstack/localstack:4.8.1
+    environment:
+      AWS_DEFAULT_REGION: us-west-2
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      SERVICES: sqs
+      DEBUG: "0"
+      PERSISTENCE: "0"
+      LS_LOG: warning
+    ports:
+      - "${LOCALSTACK_PORT:-4566}:4566"
+    volumes:
+      - "./docker/localstack/init/ready.d:/etc/localstack/init/ready.d:ro"
+    healthcheck:
+      test:
+        ["CMD-SHELL", "awslocal sqs get-queue-url --queue-name application-events >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 30
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.132.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - "./observability/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro"
+    ports:
+      - "${OTEL_GRPC_PORT:-4317}:4317"
+      - "${OTEL_HTTP_PORT:-4318}:4318"
+    depends_on:
+      - tempo
+
+  tempo:
+    image: grafana/tempo:2.8.2
+    user: "0:0"
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - "./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro"
+      - tempo-data:/tmp/tempo
+    ports:
+      - "${TEMPO_PORT:-3200}:3200"
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - "./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - application-service
+      - decision-worker
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: local-demo
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - "./observability/grafana/provisioning:/etc/grafana/provisioning:ro"
+      - "./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro"
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  application-service:
+    build:
+      context: .
+      dockerfile: application-service/Dockerfile
+    environment:
+      SERVER_PORT: 8080
+      DATABASE_URL: jdbc:postgresql://postgres:5432/lending
+      DATABASE_USERNAME: lending
+      DATABASE_PASSWORD: lending
+      AWS_ENDPOINT: http://localstack:4566
+      AWS_REGION: us-west-2
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      APPLICATION_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/application-events
+      INTERNAL_API_TOKEN: local-demo-token
+      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "1.0"
+      MANAGEMENT_TRACING_EXPORT_OTLP_ENABLED: "true"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "false"
+      MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_SERVICE_NAME: application-service
+    ports:
+      - "${APPLICATION_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+
+  decision-worker:
+    build:
+      context: .
+      dockerfile: decision-worker/Dockerfile
+    environment:
+      SERVER_PORT: 8081
+      AWS_ENDPOINT: http://localstack:4566
+      AWS_REGION: us-west-2
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      APPLICATION_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/application-events
+      APPLICATION_SERVICE_URL: http://application-service:8080
+      INTERNAL_API_TOKEN: local-demo-token
+      SQS_WAIT_TIME_SECONDS: "10"
+      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "1.0"
+      MANAGEMENT_TRACING_EXPORT_OTLP_ENABLED: "true"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "false"
+      MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_SERVICE_NAME: decision-worker
+    ports:
+      - "${DECISION_WORKER_PORT:-8081}:8081"
+    depends_on:
+      localstack:
+        condition: service_healthy
+      application-service:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+
+volumes:
+  postgres-data:
+  prometheus-data:
+  tempo-data:
+  grafana-data:

@@ -1,0 +1,173 @@
+name: Deploy demo infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type DEPLOY to build images and apply the demo stack'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: demo-deploy
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: 'true'
+  TF_INPUT: 'false'
+
+jobs:
+  deploy:
+    name: Build and deploy demo
+    runs-on: ubuntu-latest
+    environment:
+      name: demo
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_KEY: ${{ vars.TF_STATE_KEY || 'lending-workflow/demo/terraform.tfstate' }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_internal_api_token: ${{ secrets.INTERNAL_API_TOKEN }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Require explicit confirmation and configuration
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          if [[ "$CONFIRMATION" != "DEPLOY" ]]; then
+            echo 'The confirmation input must be exactly DEPLOY.' >&2
+            exit 1
+          fi
+          if [[ -z "$AWS_REGION" || -z "$AWS_DEPLOY_ROLE_ARN" ]]; then
+            echo 'Configure AWS_REGION and AWS_DEPLOY_ROLE_ARN in the demo environment.' >&2
+            exit 1
+          fi
+          if [[ -z "$TF_STATE_BUCKET" ]]; then
+            echo 'Configure TF_STATE_BUCKET in the demo environment.' >&2
+            exit 1
+          fi
+          if (( ${#TF_VAR_internal_api_token} < 32 )); then
+            echo 'Configure INTERNAL_API_TOKEN with at least 32 characters in the demo environment.' >&2
+            exit 1
+          fi
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Configure short-lived AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-demo-deploy
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Initialize Terraform
+        working-directory: infra/terraform
+        run: |
+          if [[ -z "$AWS_REGION" ]]; then
+            echo 'Configure the AWS_REGION variable in the demo environment before deploying.' >&2
+            exit 1
+          fi
+          if [[ -z "$TF_STATE_BUCKET" ]]; then
+            echo 'Configure the TF_STATE_BUCKET variable in the demo environment before deploying.' >&2
+            exit 1
+          fi
+          if [[ -z "$TF_VAR_internal_api_token" ]]; then
+            echo 'Configure the INTERNAL_API_TOKEN secret in the demo environment before deploying.' >&2
+            exit 1
+          fi
+          terraform init -input=false \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=$TF_STATE_KEY" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="use_lockfile=true" \
+            -backend-config="encrypt=true"
+
+      - name: Bootstrap ECR repositories
+        working-directory: infra/terraform
+        run: |
+          terraform apply -input=false -auto-approve \
+            -target=aws_ecr_repository.application \
+            -target=aws_ecr_repository.worker
+
+      - name: Read ECR repository URLs
+        id: repositories
+        working-directory: infra/terraform
+        shell: bash
+        run: |
+          terraform output -raw application_ecr_repository_url > "$RUNNER_TEMP/application-repository-url"
+          terraform output -raw worker_ecr_repository_url > "$RUNNER_TEMP/decision-repository-url"
+          echo "application=$(cat "$RUNNER_TEMP/application-repository-url")" >> "$GITHUB_OUTPUT"
+          echo "decision=$(cat "$RUNNER_TEMP/decision-repository-url")" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push immutable images
+        env:
+          IMAGE_TAG: sha-${{ github.sha }}
+          APPLICATION_REPOSITORY: ${{ steps.repositories.outputs.application }}
+          DECISION_REPOSITORY: ${{ steps.repositories.outputs.decision }}
+        run: |
+          image_exists() {
+            local repository_url="$1"
+            local repository_name="${repository_url#*/}"
+            local digest
+            digest="$(aws ecr batch-get-image \
+              --repository-name "$repository_name" \
+              --image-ids "imageTag=$IMAGE_TAG" \
+              --query 'images[0].imageId.imageDigest' \
+              --output text)"
+            [[ -n "$digest" && "$digest" != "None" ]]
+          }
+
+          if image_exists "$APPLICATION_REPOSITORY"; then
+            echo "Reusing existing immutable application image $IMAGE_TAG."
+          else
+            docker build --tag "$APPLICATION_REPOSITORY:$IMAGE_TAG" --file application-service/Dockerfile .
+            docker push "$APPLICATION_REPOSITORY:$IMAGE_TAG"
+          fi
+
+          if image_exists "$DECISION_REPOSITORY"; then
+            echo "Reusing existing immutable worker image $IMAGE_TAG."
+          else
+            docker build --tag "$DECISION_REPOSITORY:$IMAGE_TAG" --file decision-worker/Dockerfile .
+            docker push "$DECISION_REPOSITORY:$IMAGE_TAG"
+          fi
+
+      - name: Apply the reviewed demo stack
+        working-directory: infra/terraform
+        env:
+          IMAGE_TAG: sha-${{ github.sha }}
+          APPLICATION_REPOSITORY: ${{ steps.repositories.outputs.application }}
+          DECISION_REPOSITORY: ${{ steps.repositories.outputs.decision }}
+        run: |
+          terraform plan -out=deploy.tfplan \
+            -var="application_image=$APPLICATION_REPOSITORY:$IMAGE_TAG" \
+            -var="worker_image=$DECISION_REPOSITORY:$IMAGE_TAG"
+          terraform apply -input=false deploy.tfplan
+
+      - name: Wait for both ECS services to stabilize
+        working-directory: infra/terraform
+        run: |
+          cluster_name="$(terraform output -raw ecs_cluster_name)"
+          aws ecs wait services-stable \
+            --cluster "$cluster_name" \
+            --services application-service decision-worker
+          terraform output application_url

@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: application-service
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/lending}
+    username: ${DATABASE_USERNAME:lending}
+    password: ${DATABASE_PASSWORD:lending}
+  flyway:
+    locations: classpath:db/migration
+
+lending:
+  aws:
+    endpoint: ${AWS_ENDPOINT:}
+    region: ${AWS_REGION:us-west-2}
+    access-key: ${AWS_ACCESS_KEY_ID:}
+    secret-key: ${AWS_SECRET_ACCESS_KEY:}
+  sqs:
+    application-events-url: ${APPLICATION_EVENTS_QUEUE_URL:http://localhost:4566/000000000000/application-events}
+  outbox:
+    fixed-delay: ${OUTBOX_FIXED_DELAY:500ms}
+  internal-api-token: ${INTERNAL_API_TOKEN:local-demo-token}
+
+management:
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  tracing:
+    sampling:
+      probability: 1.0

@@ -1,0 +1,43 @@
+server:
+  port: ${SERVER_PORT:8081}
+
+spring:
+  application:
+    name: decision-worker
+  threads:
+    virtual:
+      enabled: true
+
+lending:
+  aws:
+    endpoint: ${AWS_ENDPOINT:}
+    region: ${AWS_REGION:us-west-2}
+    access-key: ${AWS_ACCESS_KEY_ID:}
+    secret-key: ${AWS_SECRET_ACCESS_KEY:}
+  sqs:
+    application-events-url: ${APPLICATION_EVENTS_QUEUE_URL:http://localhost:4566/000000000000/application-events}
+  callback:
+    base-url: ${APPLICATION_SERVICE_URL:http://localhost:8080}
+    internal-api-token: ${INTERNAL_API_TOKEN:local-demo-token}
+    connect-timeout: ${CALLBACK_CONNECT_TIMEOUT:1s}
+    read-timeout: ${CALLBACK_READ_TIMEOUT:3s}
+  poller:
+    fixed-delay: ${POLLER_FIXED_DELAY:500ms}
+    wait-time-seconds: ${SQS_WAIT_TIME_SECONDS:10}
+
+management:
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  tracing:
+    sampling:
+      probability: 1.0

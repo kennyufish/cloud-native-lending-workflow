@@ -1,0 +1,13 @@
+.git
+.env
+.mvn/wrapper/maven-wrapper.jar
+**/target
+**/.terraform
+*.tfstate*
+*.tfvars
+backend.hcl
+*.tfplan
+local-data
+**/.idea
+**/.vscode
+*.log

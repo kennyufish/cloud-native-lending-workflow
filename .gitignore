@@ -1,0 +1,13 @@
+.idea/
+.vscode/
+*.iml
+**/target/
+.env
+terraform.tfstate
+terraform.tfstate.*
+.terraform/
+*.tfvars
+backend.hcl
+*.tfplan
+*.log
+local-data/

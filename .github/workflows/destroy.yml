@@ -1,0 +1,94 @@
+name: Destroy demo infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type DESTROY to remove the demo stack and its synthetic data'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: demo-deploy
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: 'true'
+  TF_INPUT: 'false'
+
+jobs:
+  destroy:
+    name: Review and destroy demo
+    runs-on: ubuntu-latest
+    environment:
+      name: demo
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_KEY: ${{ vars.TF_STATE_KEY || 'lending-workflow/demo/terraform.tfstate' }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      # A value is required to load the root module, but a destroy plan never
+      # applies this placeholder to Secrets Manager.
+      TF_VAR_internal_api_token: destroy-only-placeholder-not-applied
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Require explicit confirmation and configuration
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          if [[ "$CONFIRMATION" != "DESTROY" ]]; then
+            echo 'The confirmation input must be exactly DESTROY.' >&2
+            exit 1
+          fi
+          if [[ -z "$AWS_REGION" || -z "$AWS_DEPLOY_ROLE_ARN" ]]; then
+            echo 'Configure AWS_REGION and AWS_DEPLOY_ROLE_ARN in the demo environment.' >&2
+            exit 1
+          fi
+          if [[ -z "$TF_STATE_BUCKET" ]]; then
+            echo 'Configure TF_STATE_BUCKET in the demo environment.' >&2
+            exit 1
+          fi
+
+      - name: Configure short-lived AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-demo-destroy
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Initialize Terraform
+        working-directory: infra/terraform
+        run: |
+          if [[ -z "$AWS_REGION" ]]; then
+            echo 'Configure the AWS_REGION variable in the demo environment before destroying.' >&2
+            exit 1
+          fi
+          if [[ -z "$TF_STATE_BUCKET" ]]; then
+            echo 'Configure the TF_STATE_BUCKET variable in the demo environment before destroying.' >&2
+            exit 1
+          fi
+          terraform init -input=false \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=$TF_STATE_KEY" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="use_lockfile=true" \
+            -backend-config="encrypt=true"
+
+      - name: Create a destroy plan for review
+        working-directory: infra/terraform
+        run: terraform plan -destroy -out=destroy.tfplan
+
+      - name: Destroy the confirmed demo stack
+        working-directory: infra/terraform
+        run: terraform apply -input=false destroy.tfplan

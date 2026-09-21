@@ -16,6 +16,12 @@ submit application → persist + write outbox → publish to SQS → decide asyn
 
 The project is deliberately synthetic. It demonstrates the engineering seams that are often missing from a Java/REST/SQL portfolio—cloud-shaped deployment, event delivery, idempotency, trace context, retries, dead-letter handling, integration tests, and operational runbooks—without presenting a toy policy as real underwriting or claiming production AWS experience.
 
+## Interactive demo
+
+[Open the interactive demo](https://kennyufish.github.io/cloud-native-lending-workflow/) · [中文演示](https://kennyufish.github.io/cloud-native-lending-workflow/?lang=zh)
+
+The standalone website in [`site/`](site/) animates the application workflow, request replay, callback retry and dead-letter queue in English and Chinese. It runs without the Java backend. See [local preview and GitHub Pages publishing](docs/DEMO.md) to use it as this repository's website.
+
 ## What is implemented
 
 | Area | Implementation |

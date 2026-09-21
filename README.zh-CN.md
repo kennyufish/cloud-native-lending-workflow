@@ -16,6 +16,12 @@
 
 项目的目的不是堆叠技术关键词，而是为 Java、REST、SQL 和 FinTech 经历补充可执行的 cloud、distributed/event-driven systems、observability、testing 和 CI/CD 证据。审核规则完全是演示逻辑，本项目不声称真实承保能力、生产 AWS 经验或合规就绪。
 
+## 交互式动画演示
+
+[打开中文演示](https://kennyufish.github.io/cloud-native-lending-workflow/?lang=zh) · [English demo](https://kennyufish.github.io/cloud-native-lending-workflow/)
+
+[`site/`](site/) 是本仓库独立的网页首页，提供中英文动画，展示申请流转、重复请求、回调重试和死信队列。无需启动 Java 后端，可单独发布为本仓库的 GitHub Pages 网站。预览和发布步骤见 [网页说明](docs/DEMO.md)。
+
 ## 已实现能力
 
 | 领域 | 实现 |
